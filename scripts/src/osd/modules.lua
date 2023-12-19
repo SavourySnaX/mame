@@ -61,6 +61,7 @@ function osdmodulesbuild()
 		MAME_DIR .. "src/osd/interface/inputseq.cpp",
 		MAME_DIR .. "src/osd/interface/inputseq.h",
 		MAME_DIR .. "src/osd/modules/debugger/debug_module.h",
+		MAME_DIR .. "src/osd/modules/debugger/debug_remote.cpp",
 		MAME_DIR .. "src/osd/modules/debugger/debuggdbstub.cpp",
 		MAME_DIR .. "src/osd/modules/debugger/debugimgui.cpp",
 		MAME_DIR .. "src/osd/modules/debugger/debugwin.cpp",
