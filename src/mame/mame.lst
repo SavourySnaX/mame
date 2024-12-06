@@ -9253,6 +9253,7 @@ qosa                            // 1992 BFM
 qosb                            // 1992 BFM
 quizvadr                        // 1991 BFM
 trebltop                        // 1991 BFM
+flareone						// 1987 Flare Technologies
 
 @source:bfm/bfm_ad5sw.cpp
 ad5bpfpm                        // Bullseye Pounds For Points (Mazooma)
@@ -47262,3 +47263,4 @@ iq151                           //
 
 @source:zvt/pp01.cpp
 pp01                            //
+

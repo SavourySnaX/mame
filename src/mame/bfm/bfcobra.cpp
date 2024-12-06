@@ -2975,6 +2975,12 @@ ROM_START( brkball )
 	ROM_LOAD("ledv1.bin",  0x00000, 0x10000, CRC(ea918cb9) SHA1(9e7047613cf1cb4b9a7fefb8a02d8479a7b09e6a))
 ROM_END
 
+ROM_START( flareone )
+	ROM_REGION( 0x200000, "bios", 0 )
+	ROM_LOAD( "rom0.rom", 0x00000, 0x4000, CRC(2c34b0df) SHA1(6f608c67554973ebd590ff5b01d0dd2bfdac3c3d))
+	ROM_LOAD( "rom1.rom", 0x10000, 0x4000, CRC(7cf1f884) SHA1(95927dec8608843504de414cbeee50148bfafee0))
+ROM_END
+
 } // Anonymous namespace
 
 
@@ -2987,3 +2993,1172 @@ GAME( 1992, qos,      0,   bfcobra,          bfcobra, bfcobra_state, init_bfcobr
 GAME( 1992, qosa,     qos, bfcobra,          bfcobra, bfcobra_state, init_bfcobra, ROT0, "BFM",      "A Question of Sport (set 2, 39-960-099)", MACHINE_IMPERFECT_GRAPHICS )
 GAME( 1992, qosb,     qos, bfcobra,          bfcobra, bfcobra_state, init_bfcobra, ROT0, "BFM",      "A Question of Sport (set 3, 39-960-089)", MACHINE_IMPERFECT_GRAPHICS )
 GAMEL(1994, brkball,  0,   bfcobjam_with_dmd,brkball, bfcobjam_state,init_bfcobjam,ROT0, "BFM/ATOD", "Break Ball",                              MACHINE_IMPERFECT_GRAPHICS, layout_brkball )
+
+
+class flareone_state : public driver_device
+{
+public:
+	flareone_state(const machine_config &mconfig, device_type type, const char *tag) :
+		driver_device(mconfig, type, tag),
+		m_maincpu(*this, "maincpu"),
+		m_upd7759(*this, "upd"),
+		m_palette(*this, "palette")
+	{
+	}
+
+	void init_flareone();
+	void flareone(machine_config &config);
+
+protected:
+	uint8_t chipset_r(offs_t offset);
+	void chipset_w(offs_t offset, uint8_t data);
+//	void rombank_w(uint8_t data);
+	uint8_t fdctrl_r();
+	uint8_t fddata_r();
+	void fdctrl_w(uint8_t data);
+	uint8_t int_latch_r();
+	uint8_t latch_r();
+	void latch_w(offs_t offset, uint8_t data);
+	uint8_t upd_r();
+	void upd_w(uint8_t data);
+	virtual void machine_reset() override ATTR_COLD;
+	virtual void video_start() override ATTR_COLD;
+	uint32_t screen_update_flareone(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect);
+	INTERRUPT_GEN_MEMBER(timer_irq);
+	INTERRUPT_GEN_MEMBER(vblank_gen);
+	void RunBlit();
+	void update_irqs();
+	void reset_fdc();
+	void exec_w_phase(uint8_t data);
+	void init_ram();
+	void command_phase(fdc_t &fdc, uint8_t data);
+	inline uint8_t* blitter_get_addr(uint32_t addr);
+	inline void z80_bank(int num, int data);
+
+	void z80_io_map(address_map &map) ATTR_COLD;
+	void z80_prog_map(address_map &map) ATTR_COLD;
+
+private:
+	uint8_t m_bank_data[4]{};
+	std::unique_ptr<uint8_t[]> m_work_ram;
+	std::unique_ptr<uint8_t[]> m_video_ram;
+	uint8_t m_h_scroll = 0;
+	uint8_t m_v_scroll = 0;
+	uint8_t m_flip_8 = 0;
+	uint8_t m_flip_22 = 0;
+	uint8_t m_videomode = 0;
+	uint8_t m_data_r = 0;
+	uint8_t m_data_t = 0;
+	int m_irq_state = 0;
+	int m_acia_irq = 0;
+	int m_vblank_irq = 0;
+	int m_blitter_irq = 0;
+	uint8_t m_z80_int = 0;
+	uint8_t m_z80_inten = 0;
+	uint32_t m_mux_input = 0;
+	uint32_t m_mux_outputlatch = 0;
+	uint8_t m_col4bit[16]{};
+	uint8_t m_col3bit[16]{};
+	uint8_t m_col8bit[256]{};
+	uint8_t m_col7bit[256]{};
+	uint8_t m_col6bit[256]{};
+	struct bf_blitter_t m_blitter;
+	fdc_t m_fdc;
+	required_device<cpu_device> m_maincpu;
+	required_device<upd7759_device> m_upd7759;
+	required_device<palette_device> m_palette;
+};
+
+static INPUT_PORTS_START( flareone )
+	PORT_START("JOYSTICK")
+	PORT_BIT( 0x01, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP )
+	PORT_BIT( 0x02, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN )
+	PORT_BIT( 0x04, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT )
+	PORT_BIT( 0x08, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT )
+	PORT_BIT( 0x10, IP_ACTIVE_HIGH, IPT_BUTTON1 )
+INPUT_PORTS_END
+
+void flareone_state::video_start()
+{
+	int i;
+
+	memcpy(m_col4bit, col4bit_default, sizeof(m_col4bit));
+	memcpy(m_col3bit, col3bit_default, sizeof(m_col3bit));
+	for (i = 0; i < 256; ++i)
+	{
+		uint8_t col;
+
+		m_col8bit[i] = i;
+		col = i & 0x7f;
+		col = (col & 0x1f) | (col76index[ ( (col & 0x60) >> 5 ) & 3] << 5);
+		m_col7bit[i] = col;
+
+		col = (col & 3) | (col76index[( (col & 0x0c) >> 2) & 3] << 2 ) |
+				(col76index[( (col & 0x30) >> 4) & 3] << 5 );
+		m_col6bit[i] = col;
+	}
+}
+
+uint32_t flareone_state::screen_update_flareone(screen_device &screen, bitmap_rgb32 &bitmap, const rectangle &cliprect)
+{
+	/* Select screen has to be programmed into two registers */
+	/* No idea what happens if the registers are different */
+	uint32_t offset;
+	if (m_flip_8 & 0x40 && m_flip_22 & 0x40)
+		offset = 0x10000;
+	else
+		offset = 0;
+
+	uint8_t const *hirescol;
+	uint8_t const *lorescol;
+	if(m_videomode & 0x20)
+	{
+		hirescol = m_col3bit;
+		lorescol = m_col7bit;
+	}
+	else if(m_videomode & 0x40)
+	{
+		hirescol = m_col4bit;
+		lorescol = m_col6bit;
+	}
+	else
+	{
+		hirescol = m_col4bit;
+		lorescol = m_col8bit;
+	}
+
+	for (int y = cliprect.top(); y <= cliprect.bottom(); ++y)
+	{
+		uint16_t y_offset = (y + m_v_scroll) * 256;
+		uint8_t const *const src = &m_video_ram[offset + y_offset];
+		uint32_t *dest = &bitmap.pix(y);
+
+		for (int x = cliprect.left(); x <= cliprect.right() / 2; ++x)
+		{
+			uint8_t const x_offset = x + m_h_scroll;
+			uint8_t const pen = *(src + x_offset);
+
+			if ( ( m_videomode & 0x81 ) == 1 || (m_videomode & 0x80 && pen & 0x80) )
+			{
+				*dest++ = m_palette->pen(hirescol[pen & 0x0f]);
+				*dest++ = m_palette->pen(hirescol[(pen >> 4) & 0x0f]);
+			}
+			else
+			{
+				*dest++ = m_palette->pen(lorescol[pen]);
+				*dest++ = m_palette->pen(lorescol[pen]);
+			}
+		}
+	}
+
+	return 0;
+}
+
+uint8_t* flareone_state::blitter_get_addr(uint32_t addr)
+{
+	if (addr < 0x10000)
+	{
+		/* Is this region fixed? */
+		return (uint8_t*)(memregion("user1")->base() + addr);
+	}
+	else if(addr < 0x20000)
+	{
+		addr &= 0xffff;
+		addr += (m_bank_data[0] & 1) ? 0x10000 : 0;
+
+		return (uint8_t*)(memregion("user1")->base() + addr + ((m_bank_data[0] >> 1) * 0x20000));
+	}
+	else if (addr >= 0x20000 && addr < 0x40000)
+	{
+		return (uint8_t*)&m_video_ram[addr - 0x20000];
+	}
+	else
+	{
+		return (uint8_t*)&m_work_ram[addr - 0x40000];
+	}
+}
+
+
+/*
+    This is based this on the Slipstream technical reference manual.
+    The Flare One blitter is a simpler design with slightly different parameters
+    and will require hardware tests to figure everything out correctly.
+*/
+void flareone_state::RunBlit()
+{
+#define BLITPRG_READ(x)     blitter.x = *(blitter_get_addr(blitter.program.addr++))
+
+	struct bf_blitter_t &blitter = m_blitter;
+	int cycles_used = 0;
+
+
+if (0)
+{
+	do
+	{
+		uint8_t srcdata = 0;
+		uint8_t dstdata = 0;
+
+		/* Read the blitter command */
+		BLITPRG_READ(source.as8bit.addr0);
+		BLITPRG_READ(source.as8bit.addr1);
+		BLITPRG_READ(source.as8bit.addr2);
+		BLITPRG_READ(dest.as8bit.addr0);
+		BLITPRG_READ(dest.as8bit.addr1);
+		BLITPRG_READ(dest.as8bit.addr2);
+		BLITPRG_READ(modectl);
+		BLITPRG_READ(compfunc);
+		BLITPRG_READ(outercnt);
+		BLITPRG_READ(innercnt);
+		BLITPRG_READ(step);
+		BLITPRG_READ(pattern);
+
+#if 0
+		/* This debug is now wrong ! */
+		if (DEBUG_BLITTER)
+		{
+			osd_printf_debug("\n%s:Blitter: Running command from 0x%.5x\n\n", device->machine().describe_context(), blitter.program.addr - 12);
+			osd_printf_debug("Command Reg         %.2x",   blitter.command);
+			osd_printf_debug("     %s %s %s %s %s %s %s\n",
+				blitter.command & CMD_RUN ? "RUN" : "     ",
+				blitter.command & CMD_COLST ? "COLST" : "     ",
+				blitter.command & CMD_PARRD ? "PARRD" : "     ",
+				blitter.command & CMD_SRCUP ? "SRCUP" : "     ",
+				blitter.command & CMD_DSTUP ? "DSTUP" : "     ");
+
+			osd_printf_debug("Src Address Byte 0  %.2x\n", blitter.source.as8bit.addr0);
+			osd_printf_debug("Src Address Byte 1  %.2x\n", blitter.source.as8bit.addr1);
+			osd_printf_debug("Src Control         %.2x\n", blitter.source.as8bit.addr2);
+			osd_printf_debug("  Src Address       %.5x\n", blitter.source.addr & 0xfffff);
+			osd_printf_debug("Dest Address Byte 0 %.2x\n", blitter.dest.as8bit.addr0);
+			osd_printf_debug("Dest Address Byte 1 %.2x\n", blitter.dest.as8bit.addr1);
+			osd_printf_debug("Dest Control        %.2x\n", blitter.dest.as8bit.addr2);
+			osd_printf_debug("  Dst. Address      %.5x\n", blitter.dest.addr & 0xfffff);
+			osd_printf_debug("Mode Control        %.2x",   blitter.modectl);
+			osd_printf_debug("     %s\n", blitter.modectl & MODE_BITTOBYTE ? "BIT_TO_BYTE" : "");
+
+			osd_printf_debug("Comp. and LFU       %.2x\n", blitter.compfunc);
+			osd_printf_debug("Outer Loop Count    %.2x (%d)\n", blitter.outercnt, blitter.outercnt);
+			osd_printf_debug("Inner Loop Count    %.2x (%d)\n", blitter.innercnt, blitter.innercnt);
+			osd_printf_debug("Step Value          %.2x\n", blitter.step);
+			osd_printf_debug("Pattern Byte        %.2x\n", blitter.pattern);
+		}
+#endif
+
+		/* Ignore these writes */
+		if (blitter.dest.addr == 0)
+			return;
+
+		/* Begin outer loop */
+		for (;;)
+		{
+			uint8_t innercnt = blitter.innercnt;
+			dstdata = blitter.pattern;
+
+			if (blitter.command & CMD_LINEDRAW)
+			{
+				do
+				{
+					if (blitter.modectl & MODE_YFRAC)
+					{
+						if (blitter.modectl & MODE_SSIGN )
+							blitter.dest.as8bit.addr0--;
+						else
+							blitter.dest.as8bit.addr0++;
+					}
+					else
+					{
+						if (blitter.modectl & MODE_DSIGN )
+							blitter.dest.as8bit.addr1--;
+						else
+							blitter.dest.as8bit.addr1++;
+					}
+					if( blitter.source.as8bit.addr0 < blitter.step )
+					{
+						blitter.source.as8bit.addr0 -= blitter.step;
+						blitter.source.as8bit.addr0 += blitter.source.as8bit.addr1;
+
+						if ( blitter.modectl & MODE_YFRAC )
+						{
+							if (blitter.modectl & MODE_DSIGN )
+								blitter.dest.as8bit.addr1--;
+							else
+								blitter.dest.as8bit.addr1++;
+						}
+						else
+						{
+							if (blitter.modectl & MODE_SSIGN )
+								blitter.dest.as8bit.addr0--;
+							else
+								blitter.dest.as8bit.addr0++;
+						}
+					}
+					else
+					{
+						blitter.source.as8bit.addr0 -= blitter.step;
+					}
+
+					*blitter_get_addr( blitter.dest.addr) = blitter.pattern;
+					cycles_used++;
+
+				} while (--innercnt);
+			}
+			else do
+			{
+				uint8_t   inhibit = 0;
+
+				/* TODO: Set this correctly */
+				uint8_t   result = blitter.pattern;
+
+				if (LOOPTYPE == 3 && innercnt == blitter.innercnt)
+				{
+					srcdata = *(blitter_get_addr( blitter.source.addr & 0xfffff));
+					blitter.source.as16bit.loword++;
+					cycles_used++;
+				}
+
+				/* Enable source address read and increment? */
+				if (!(blitter.modectl & (MODE_BITTOBYTE | MODE_PALREMAP)))
+				{
+					if (LOOPTYPE == 0 || LOOPTYPE == 1)
+					{
+						srcdata = *(blitter_get_addr( blitter.source.addr & 0xfffff));
+						cycles_used++;
+
+						if (blitter.modectl & MODE_SSIGN)
+							blitter.source.as16bit.loword--;
+						else
+							blitter.source.as16bit.loword++;
+
+						result = srcdata;
+					}
+				}
+
+				/* Read destination pixel? */
+				if (LOOPTYPE == 0)
+				{
+					dstdata = *blitter_get_addr( blitter.dest.addr & 0xfffff);
+					cycles_used++;
+				}
+
+				/* Inhibit depending on the bit selected by the inner count */
+
+				/* Switch on comparator type? */
+				if (blitter.modectl & MODE_BITTOBYTE)
+				{
+					inhibit = !(srcdata & (1 << (8 - innercnt)));
+				}
+
+				if (blitter.compfunc & CMPFUNC_BEQ)
+				{
+					if (srcdata == blitter.pattern)
+					{
+						inhibit = 1;
+
+						/* TODO: Resume from inhibit? */
+						if (blitter.command & CMD_COLST)
+							return;
+					}
+				}
+				if (blitter.compfunc & CMPFUNC_LT)
+				{
+					if ((srcdata & 0xc0) > (dstdata & 0xc0))
+					{
+						inhibit = 1;
+
+						/* TODO: Resume from inhibit? */
+						if (blitter.command & CMD_COLST)
+							return;
+					}
+				}
+				if (blitter.compfunc & CMPFUNC_EQ)
+				{
+					if ((srcdata & 0xc0) == (dstdata & 0xc0))
+					{
+						inhibit = 1;
+
+						/* TODO: Resume from inhibit? */
+						if (blitter.command & CMD_COLST)
+							return;
+					}
+				}
+				if (blitter.compfunc & CMPFUNC_GT)
+				{
+					if ((srcdata & 0xc0) < (dstdata & 0xc0))
+					{
+						inhibit = 1;
+
+						/* TODO: Resume from inhibit? */
+						if (blitter.command & CMD_COLST)
+							return;
+					}
+				}
+
+				/* Write the data if not inhibited */
+				if (!inhibit)
+				{
+					if (blitter.modectl == MODE_PALREMAP)
+					{
+						/*
+						    In this mode, the source points to a 256 entry lookup table.
+						    The existing destination pixel is used as a lookup
+						    into the table and the colours is replaced.
+						*/
+						uint8_t dest = *blitter_get_addr( blitter.dest.addr);
+						uint8_t newcol = *(blitter_get_addr( (blitter.source.addr + dest) & 0xfffff));
+
+						*blitter_get_addr( blitter.dest.addr) = newcol;
+						cycles_used += 3;
+					}
+					else
+					{
+						uint8_t final_result = 0;
+
+						if (blitter.compfunc & CMPFUNC_LOG3)
+							final_result |= result & dstdata;
+
+						if (blitter.compfunc & CMPFUNC_LOG2)
+							final_result |= result & ~dstdata;
+
+						if (blitter.compfunc & CMPFUNC_LOG1)
+							final_result |= ~result & dstdata;
+
+						if (blitter.compfunc & CMPFUNC_LOG0)
+							final_result |= ~result & ~dstdata;
+
+						*blitter_get_addr( blitter.dest.addr) = final_result;
+						cycles_used++;
+					}
+				}
+
+				/* Update destination address */
+				if (blitter.modectl & MODE_DSIGN)
+					blitter.dest.as16bit.loword--;
+				else
+					blitter.dest.as16bit.loword++;
+
+			} while (--innercnt);
+
+			if (!--blitter.outercnt)
+			{
+				break;
+			}
+			else
+			{
+				if (blitter.command & CMD_DSTUP)
+					blitter.dest.as16bit.loword += blitter.step;
+
+				if (blitter.command & CMD_SRCUP)
+					blitter.source.as16bit.loword += blitter.step;
+
+				if (blitter.command & CMD_PARRD)
+				{
+					BLITPRG_READ(innercnt);
+					BLITPRG_READ(step);
+					BLITPRG_READ(pattern);
+				}
+			}
+		}
+
+		/* Read next command header */
+		BLITPRG_READ(command);
+
+	} while (blitter.command  & CMD_RUN);
+
+}
+else
+{
+	osd_printf_debug("SKIPPING BLIT\n");
+
+}
+
+	/* Burn Z80 cycles while blitter is in operation */
+	m_maincpu->spin_until_time(attotime::from_nsec( (1000000000 / Z80_XTAL)*cycles_used * 2 ) );
+}
+
+/***************************************************************************
+
+    Flare One Register Map
+
+    01  Bank control for Z80 region 0x4000-0x7fff (16kB)    WR
+    02  Bank control for Z80 region 0x8000-0xbfff (16kB)    WR
+    03  Bank control for Z80 region 0xc000-0xffff (16kB)    WR
+
+    06  Interrupt status....................................WR
+    07  Interrupt ack.......................................WR
+        Writing here sets the line number that vertical interrupt is generated at.
+        cmd1, bit2 is the 9th bit of the line number
+        ???? Written with 0x21
+    08  cmd1                                                WR * bit 6 = screen select
+        bit2 = 9th bit of vertical interrupt line number
+        bit6 = 1 = select screen 1 else screen 0
+    09  cmd2 Linked with c001...............................W * bit 0 = 1 = hires
+        bit0=1=hi res else lo res (as long as bit7 is 0)
+        bit5=mask msb of each pixel
+        bit6=mask 2 msbits of each lores pixel
+        bit7=1=variable resolution - resolution is set by bit 7 of each vram byte.  bit7=1=2 hires pixels
+    0A  ???? Written with 0 and 1...........................W
+        color of border
+
+    0B  Horizontal frame buffer scroll .....................W
+    0C  Vertical frame buffer scroll .......................W
+
+    0D  Colour hold colour..................................W
+    0E  Palette value for hi-res magenta....................W
+    0F  Palette value for hi-res yellow?....................W
+    14  ....................................................W
+
+    18  Blitter program low byte............................WR
+    19  Blitter program middle byte.........................W
+    1A  Blitter program high byte...........................W
+    1B  Blitter command?....................................W
+    1C  Blitter status?......................................R
+    20  Blitter control register............................W
+
+    22  ???? Linked with C002...............................W
+        Mask of 20
+
+        Joystick: xxx1 11xx                                 R
+        ? (polled on tight loop):  x1xx xxxx                R
+
+    40: ROM bank select.....................................W
+
+***************************************************************************/
+
+void flareone_state::update_irqs()
+{
+	int newstate = m_blitter_irq || m_vblank_irq || m_acia_irq;
+
+	if (newstate != m_irq_state)
+	{
+		m_irq_state = newstate;
+		m_maincpu->set_input_line(0, m_irq_state ? ASSERT_LINE : CLEAR_LINE);
+	}
+}
+
+uint8_t flareone_state::chipset_r(offs_t offset)
+{
+	uint8_t val = 0xff;
+
+	switch(offset)
+	{
+		case 1:
+		case 2:
+		case 3:
+		{
+			val = m_bank_data[offset];
+			break;
+		}
+		case 6:
+		{
+			/* TODO */
+			val = m_vblank_irq << 4;
+			break;
+		}
+		case 7:
+		{
+			m_vblank_irq = 0;
+			val = 0x1;
+
+			/* TODO */
+			update_irqs();
+			break;
+		}
+		case 0x1C:
+		{
+			/* Blitter status ? */
+			val = 0;
+			break;
+		}
+		case 0x20:
+		{
+			/* Seems correct - used during RLE pic decoding */
+			val = m_blitter.dest.as8bit.addr0;
+			break;
+		}
+		case 0x22:
+		{
+			val = 0x40 | ioport("JOYSTICK")->read();
+			break;
+		}
+		default:
+		{
+			osd_printf_debug("Flare One unknown read: 0x%.2x (PC:0x%.4x)\n", offset, m_maincpu->pcbase());
+		}
+	}
+
+	return val;
+}
+
+void flareone_state::chipset_w(offs_t offset, uint8_t data)
+{
+	switch (offset)
+	{
+		case 0x00:
+		case 0x01:
+		case 0x02:
+		case 0x03:
+		{
+			if (data > 0x3f)
+				popmessage("%x: Unusual bank access (%x)\n", m_maincpu->pcbase(), data);
+
+			data &= 0x3f;
+			m_bank_data[offset] = data;
+			z80_bank(offset, data);
+			break;
+		}
+
+		case 0x08:
+		{
+			m_flip_8 = data;
+			break;
+		}
+		case 9:
+			m_videomode = data;
+			break;
+
+		case 0x0B:
+		{
+			m_h_scroll = data;
+			break;
+		}
+		case 0x0C:
+		{
+			m_v_scroll = data;
+			break;
+		}
+		case 0x0E:
+		{
+			m_col4bit[5] = data;
+			m_col3bit[5] = data;
+			m_col3bit[5 + 8] = data;
+			break;
+		}
+		case 0x0f:
+		{
+			m_col4bit[6] = data;
+			m_col3bit[6] = data;
+			m_col3bit[6 + 8] = data;
+			break;
+		}
+		case 0x18:
+		{
+			m_blitter.program.as8bit.addr0 = data;
+			break;
+		}
+		case 0x19:
+		{
+			m_blitter.program.as8bit.addr1 = data;
+			break;
+		}
+		case 0x1A:
+		{
+			m_blitter.program.as8bit.addr2 = data;
+			break;
+		}
+		case 0x20:
+		{
+			m_blitter.command = data;
+
+			if (data & CMD_RUN)
+				RunBlit();
+			else
+				osd_printf_debug("Blitter stopped by IO.\n");
+
+			break;
+		}
+		case 0x22:
+		{
+			m_flip_22 = data;
+			break;
+		}
+		default:
+		{
+			osd_printf_debug("Flare One unknown write: 0x%.2x with 0x%.2x (PC:0x%.4x)\n", offset, data, m_maincpu->pcbase());
+		}
+	}
+}
+
+void flareone_state::z80_bank(int num, int data)
+{
+	static const char * const bank_names[] = { "bank1", "bank2", "bank3" };
+
+	if (data < 0x08)
+	{
+		uint32_t offset = ((m_bank_data[0] >> 1) * 0x20000) + ((0x4000 * data) ^ ((m_bank_data[0] & 1) ? 0 : 0x10000));
+
+		membank(bank_names[num - 1])->set_base(memregion("bios")->base() + offset);
+	}
+	else if (data < 0x10)
+	{
+		membank(bank_names[num - 1])->set_base(&m_video_ram[(data - 0x08) * 0x4000]);
+	}
+	else
+	{
+		membank(bank_names[num - 1])->set_base(&m_work_ram[(data - 0x10) * 0x4000]);
+	}
+}
+/*
+void flareone_state::rombank_w(uint8_t data)
+{
+	m_bank_data[0] = data;
+	z80_bank(1, m_bank_data[1]);
+	z80_bank(2, m_bank_data[2]);
+	z80_bank(3, m_bank_data[3]);
+}*/
+
+void flareone_state::reset_fdc()
+{
+	m_fdc = fdc_t();
+
+	m_fdc.MSR = 0x80;
+	m_fdc.phase = COMMAND;
+}
+
+uint8_t flareone_state::fdctrl_r()
+{
+	uint8_t val = 0;
+
+	val = m_fdc.MSR;
+
+	return val;
+}
+
+uint8_t flareone_state::fddata_r()
+{
+	constexpr int BPS = 1024;
+	constexpr int SPT = 10;
+	constexpr int BPT = BPS * SPT;
+
+	uint8_t val = 0;
+
+	if (m_fdc.phase == EXECUTION_R)
+	{
+		switch (m_fdc.cmd[0] & 0x1f)
+		{
+			/* Specify */
+			case READ_DATA:
+			{
+				if (m_fdc.setup_read)
+				{
+					m_fdc.track = m_fdc.cmd[2];
+					m_fdc.side = m_fdc.cmd[3];
+					m_fdc.sector = m_fdc.cmd[4];
+					m_fdc.number = m_fdc.cmd[5];
+					m_fdc.stop_track = m_fdc.cmd[6];
+					//int GPL = m_fdc.cmd[7];
+					//int DTL = m_fdc.cmd[8];
+
+					m_fdc.setup_read = 0;
+					m_fdc.byte_pos = 0;
+				}
+
+				m_fdc.offset = (BPT * m_fdc.track*2) + (m_fdc.side ? BPT : 0) + (BPS * (m_fdc.sector-1)) + m_fdc.byte_pos++;
+				val = *(memregion("user2")->base() + m_fdc.offset);
+
+				/* Move on to next sector? */
+				if (m_fdc.byte_pos == 1024)
+				{
+					m_fdc.byte_pos = 0;
+
+					if (m_fdc.sector == m_fdc.stop_track || ++m_fdc.sector == 11)
+					{
+						/* End of read operation */
+						m_fdc.MSR = 0xd0;
+						m_fdc.phase = RESULTS;
+
+						m_fdc.results[0] = 0;
+						m_fdc.results[1] = 0;
+						m_fdc.results[2] = 0;
+
+						m_fdc.results[3] = 0;
+						m_fdc.results[4] = 0;
+						m_fdc.results[5] = 0;
+						m_fdc.results[6] = 0;
+					}
+				}
+				break;
+			}
+		}
+	}
+	else if (m_fdc.phase == RESULTS)
+	{
+		val = m_fdc.results[m_fdc.res_cnt++];
+
+		if (m_fdc.res_cnt == m_fdc.res_len)
+		{
+			m_fdc.phase = COMMAND;
+			m_fdc.res_cnt = 0;
+			m_fdc.MSR &= ~0x40;
+		}
+	}
+
+	return val;
+}
+
+void flareone_state::fdctrl_w(uint8_t data)
+{
+	switch (m_fdc.phase)
+	{
+		case COMMAND:
+		{
+			command_phase(m_fdc, data);
+			break;
+		}
+		case EXECUTION_W:
+		{
+			exec_w_phase(data);
+			break;
+		}
+		default:
+		{
+			osd_printf_debug("Unknown FDC phase?!");
+		}
+	}
+}
+
+void flareone_state::command_phase(fdc_t &fdc, uint8_t data)
+{
+	if (fdc.cmd_cnt == 0)
+	{
+		fdc.cmd[0] = data;
+
+		fdc.cmd_cnt = 1;
+
+		switch (data & 0x1f)
+		{
+			/* Specify */
+			case READ_DATA:
+			{
+//              osd_printf_debug("Read data\n");
+				fdc.cmd_len = 9;
+				fdc.res_len = 7;
+				fdc.next_phase = EXECUTION_R;
+				fdc.setup_read = 1;
+				break;
+			}
+			case SPECIFY:
+			{
+//              osd_printf_debug("Specify\n");
+				fdc.cmd_len = 3;
+				fdc.res_len = 0;
+				fdc.next_phase = COMMAND;
+				break;
+			}
+			case RECALIBRATE:
+			{
+//              osd_printf_debug("Recalibrate\n");
+				fdc.cmd_len = 2;
+				fdc.res_len = 0;
+				fdc.next_phase = COMMAND;
+				//fdc.MSR |= 0x40;
+				break;
+			}
+			case SENSE_INTERRUPT_STATUS:
+			{
+//              osd_printf_debug("Sense interrupt status\n");
+				fdc.cmd_len = 1;
+				fdc.res_len = 2;
+				fdc.phase = RESULTS;
+
+				fdc.results[0] = 0;
+				fdc.results[1] = 0;
+
+				fdc.cmd_cnt = 0;
+				fdc.MSR |= 0x40;
+				break;
+			}
+			case SEEK:
+			{
+//              osd_printf_debug("Seek\n");
+				fdc.cmd_len = 3;
+				fdc.res_len = 0;
+				fdc.next_phase = COMMAND;
+				break;
+			}
+			default:
+			{
+//              osd_printf_debug("%x\n",data & 0x1f);
+			}
+		}
+	}
+	else
+	{
+		fdc.cmd[fdc.cmd_cnt++] = data;
+		//osd_printf_debug(" %x\n",data);
+	}
+
+	if (fdc.cmd_cnt == fdc.cmd_len)
+	{
+		fdc.phase = fdc.next_phase;
+		fdc.cmd_cnt = 0;
+
+		if ((fdc.cmd[0] & 0x1f) == READ_DATA)
+			fdc.MSR = 0xf0;
+	}
+}
+
+#ifdef UNUSED_FUNCTION
+uint8_t flareone_state::exec_r_phase(void)
+{
+	return 0;
+}
+#endif
+
+void flareone_state::exec_w_phase(uint8_t data)
+{
+}
+
+#ifdef UNUSED_FUNCTION
+uint8_t flareone_state::results_phase(void)
+{
+	return 0;
+}
+
+void flareone_state::fd_op_w(uint8_t data)
+{
+}
+
+void flareone_state::fd_ctrl_w(uint8_t data)
+{
+}
+#endif
+
+void flareone_state::machine_reset()
+{
+	unsigned int pal;
+
+	for (pal = 0; pal < 256; ++pal)
+	{
+		m_palette->set_pen_color(pal, pal3bit((pal>>5)&7), pal3bit((pal>>2)&7), pal2bit(pal&3));
+	}
+
+	m_bank_data[0] = 1;
+	reset_fdc();
+
+	m_irq_state = m_blitter_irq = m_vblank_irq = m_acia_irq = 0;
+}
+
+/***************************************************************************
+
+    Cobra I/Viper Z80 Memory Map
+
+***************************************************************************/
+
+void flareone_state::z80_prog_map(address_map &map)
+{
+	map(0x0000, 0x3fff).bankr("bank4");
+	map(0x4000, 0x7fff).bankrw("bank1");
+	map(0x8000, 0xbfff).bankrw("bank2");
+	map(0xc000, 0xffff).bankrw("bank3");
+}
+
+void flareone_state::z80_io_map(address_map &map)
+{
+map.global_mask(0xff);
+	map(0x00, 0x23).rw(FUNC(flareone_state::chipset_r), FUNC(flareone_state::chipset_w));
+//	map(0x24, 0x25).w(m_acia6850_0, FUNC(acia6850_device::write));
+//	map(0x26, 0x27).r(m_acia6850_0, FUNC(acia6850_device::read));
+	map(0x30, 0x30).r(FUNC(flareone_state::fdctrl_r));
+	map(0x31, 0x31).rw(FUNC(flareone_state::fddata_r), FUNC(flareone_state::fdctrl_w));
+//	map(0x40, 0x40).w(FUNC(flareone_state::rombank_w));
+//	map(0x50, 0x50).w("ramdac", FUNC(ramdac_device::index_w));
+//	map(0x51, 0x51).rw("ramdac", FUNC(ramdac_device::pal_r), FUNC(ramdac_device::pal_w));
+//	map(0x52, 0x52).w("ramdac", FUNC(ramdac_device::mask_w));
+//	map(0x53, 0x53).w("ramdac", FUNC(ramdac_device::index_r_w));
+}
+
+
+/*void flareone_state::ramdac_map(address_map &map)
+{
+	map(0x000, 0x3ff).rw("ramdac", FUNC(ramdac_device::ramdac_pal_r), FUNC(ramdac_device::ramdac_rgb666_w));
+}*/
+
+
+/***************************************************************************
+
+    Cobra I/Viper 6809 Memory Map
+
+    Cobra I has these components:
+
+    EF68B50P            - For communication with Z80
+    EF68B50P            - For data retrieval
+    AY38912A
+    UPD7759C
+    BFM1090 (CF30056)   - 'TEXAS' I/O chip, lamps and misc
+    BFM1095 (CF30057)   - 'TEXAS' I/O chip, handles switches
+    BFM1071             - 6809 Address decoding and bus control
+
+    /IRQ provided by EF68850P at IC38
+    /FIRQ connected to meter current sensing circuitry
+
+    TODO: Calculate watchdog timer period.
+
+***************************************************************************/
+
+/* TODO */
+uint8_t flareone_state::int_latch_r()
+{
+	return 2 | 1;
+}
+
+/* TODO */
+uint8_t flareone_state::latch_r()
+{
+	return m_mux_input;
+}
+
+void flareone_state::latch_w(offs_t offset, uint8_t data)
+{
+	/* TODO: This is borrowed from Scorpion 1 */
+	switch(offset)
+	{
+		case 0:
+		{
+			int changed = m_mux_outputlatch ^ data;
+			static const char *const port[] = { "STROBE0", "STROBE1", "STROBE2", "STROBE3", "STROBE4", "STROBE5", "STROBE6", "STROBE7" };
+
+			m_mux_outputlatch = data;
+
+			/* Clock has changed */
+			if (changed & 0x08)
+			{
+				int input_strobe = data & 0x7;
+
+				/* Clock is low */
+				if (!(data & 0x08))
+					m_mux_input = ioport(port[input_strobe])->read();
+			}
+			break;
+		}
+		case 1:
+		{
+//          strobe_data_l = data;
+			break;
+		}
+		case 2:
+		{
+//          strobe_data_h = data;
+			break;
+		}
+	}
+}
+
+uint8_t flareone_state::upd_r()
+{
+	return 2 | m_upd7759->busy_r();
+}
+
+void flareone_state::upd_w(uint8_t data)
+{
+	m_upd7759->reset_w(BIT(data, 7));
+	m_upd7759->port_w(data & 0x3f);
+	m_upd7759->start_w(!BIT(data, 6));
+}
+
+void flareone_state::init_flareone()
+{
+	init_ram();
+
+	m_bank_data[0] = 1;
+	m_bank_data[1] = 0;
+	m_bank_data[2] = 0;
+	m_bank_data[3] = 0;
+
+	/* Fixed 16kB ROM region */
+	membank("bank4")->set_base(memregion("bios")->base());
+
+	/* TODO: Properly sort out the data ACIA */
+//	m_acia6850_2->write_rxd(1);
+
+	/* Finish this */
+	save_item(NAME(m_data_r));
+	save_item(NAME(m_data_t));
+	save_item(NAME(m_h_scroll));
+	save_item(NAME(m_v_scroll));
+	save_item(NAME(m_flip_8));
+	save_item(NAME(m_flip_22));
+	save_item(NAME(m_z80_int));
+	save_item(NAME(m_z80_inten));
+	save_item(NAME(m_bank_data));
+	save_pointer(NAME(m_work_ram), 0xc0000);
+	save_pointer(NAME(m_video_ram), 0x20000);
+}
+
+/* TODO */
+INTERRUPT_GEN_MEMBER(flareone_state::timer_irq)
+{
+//	device.execute().set_input_line(M6809_IRQ_LINE, HOLD_LINE);
+}
+
+/* TODO */
+INTERRUPT_GEN_MEMBER(flareone_state::vblank_gen)
+{
+	m_vblank_irq = 1;
+	update_irqs();
+}
+
+void flareone_state::flareone(machine_config &config)
+{
+	Z80(config, m_maincpu, Z80_XTAL);
+	m_maincpu->set_addrmap(AS_PROGRAM, &flareone_state::z80_prog_map);
+	m_maincpu->set_addrmap(AS_IO, &flareone_state::z80_io_map);
+	m_maincpu->set_vblank_int("screen", FUNC(flareone_state::vblank_gen));
+/*
+	MC6809(config, m_audiocpu, M6809_XTAL); // MC6809P
+	m_audiocpu->set_addrmap(AS_PROGRAM, &flareone_state::m6809_prog_map);
+	m_audiocpu->set_periodic_int(FUNC(flareone_state::timer_irq), attotime::from_hz(1000));
+*/
+//	NVRAM(config, "nvram", nvram_device::DEFAULT_ALL_0);
+
+
+	/* TODO */
+	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_RASTER));
+	screen.set_refresh_hz(50);
+	screen.set_vblank_time(ATTOSECONDS_IN_USEC(2500) /* not accurate */);
+	screen.set_size(512, 256);
+	screen.set_visarea_full();
+	screen.set_screen_update(FUNC(flareone_state::screen_update_flareone));
+
+	PALETTE(config, m_palette).set_entries(256);
+
+/*	ramdac_device &ramdac(RAMDAC(config, "ramdac", 0, m_palette)); // MUSIC Semiconductor TR9C1710 RAMDAC or equivalent
+	ramdac.set_addrmap(0, &flareone_state::ramdac_map);
+	ramdac.set_split_read(1);
+*/
+	SPEAKER(config, "mono").front_center();
+
+	AY8910(config, "aysnd", M6809_XTAL / 4).add_route(ALL_OUTPUTS, "mono", 0.20);
+
+	UPD7759(config, m_upd7759).add_route(ALL_OUTPUTS, "mono", 0.40);
+
+	/* ACIAs */
+/*	ACIA6850(config, m_acia6850_0, 0);
+	m_acia6850_0->txd_handler().set(m_acia6850_1, FUNC(acia6850_device::write_rxd));
+	m_acia6850_0->irq_handler().set(FUNC(flareone_state::z80_acia_irq));
+
+	ACIA6850(config, m_acia6850_1, 0);
+	m_acia6850_1->txd_handler().set(m_acia6850_0, FUNC(acia6850_device::write_rxd));
+
+	ACIA6850(config, m_acia6850_2, 0);
+	m_acia6850_2->txd_handler().set(FUNC(flareone_state::data_acia_tx_w));
+	m_acia6850_2->irq_handler().set(FUNC(flareone_state::m6809_data_irq));
+
+	clock_device &acia_clock(CLOCK(config, "acia_clock", 31250*16)); // What are the correct ACIA clocks ?
+	acia_clock.signal_handler().set(FUNC(flareone_state::write_acia_clock));
+*/
+	//METERS(config, m_meters, 0).set_number(8);
+}
+
+void flareone_state::init_ram()
+{
+	/* 768kB work RAM */
+	m_work_ram = make_unique_clear<uint8_t[]>(0xC0000);
+
+	/* 128kB video RAM */
+	m_video_ram = make_unique_clear<uint8_t[]>(0x20000);
+}
+
+
+//    YEAR  NAME      PARENT  COMPAT  MACHINE   INPUT     CLASS           INIT          COMPANY     FULLNAME     FLAGS
+COMP( 1987, flareone, 0,	  0,      flareone,  flareone,  flareone_state,  init_flareone, "FL1",      "Flare One", MACHINE_NOT_WORKING )
